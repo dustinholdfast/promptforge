@@ -1,23 +1,129 @@
+import { eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { packs, runs } from "../../../db/schema";
-import { eq } from "drizzle-orm";
-import { ensureDatabase } from "../../../db/ensure";
+import { HttpError, newId, requireUser } from "../../../lib/auth";
+import { envString } from "../../../lib/env";
+import { errorResponse, readJson, str } from "../../../lib/http";
+import { PROVIDERS, resolveProvider } from "../../../lib/models";
+import { ProviderError, streamCompletion } from "../../../lib/providers";
+import { parseVariables, renderPrompt } from "../../../lib/template";
 
+/**
+ * Runs a pack against a real model and streams the result back as SSE.
+ *
+ * Wire format (one JSON object per `data:` line):
+ *   {"type":"start","runId":...,"model":...}
+ *   {"type":"delta","text":"..."}
+ *   {"type":"done","runId":...,"inputTokens":n,"outputTokens":n,"latencyMs":n}
+ *   {"type":"error","message":"..."}
+ */
 export async function POST(request: Request) {
-  const started = Date.now();
   try {
-    await ensureDatabase();
-    const body = await request.json() as { packId: string; model: string; values: Record<string, string> };
+    const user = await requireUser(request);
+    const body = await readJson(request);
+
+    const [pack] = await getDb().select().from(packs).where(eq(packs.id, str(body.packId))).limit(1);
+    if (!pack) throw new HttpError("Pack not found.", 404);
+
+    const values = (body.values && typeof body.values === "object" ? body.values : {}) as Record<string, string>;
+    const variables = parseVariables(pack.variables);
+    const { text: prompt, missing } = renderPrompt(pack.prompt, variables, values);
+    if (missing.length) {
+      const labels = missing.map((name) => variables.find((v) => v.name === name)?.label ?? name);
+      throw new HttpError(`Fill in: ${labels.join(", ")}.`, 400);
+    }
+
+    // The runner may override the model for a single run without editing the pack.
+    const modelId = str(body.model).trim() || pack.model;
+    const provider = resolveProvider(modelId, pack.provider);
+    const apiKey = envString(PROVIDERS[provider].envKey);
+    if (!apiKey) {
+      throw new ProviderError(
+        `${PROVIDERS[provider].label} has no API key configured. Add ${PROVIDERS[provider].envKey} to .dev.vars (local) or run \`npx wrangler secret put ${PROVIDERS[provider].envKey}\` (deployed).`,
+        401,
+        provider,
+      );
+    }
+
+    const runId = newId("run");
+    const startedAt = Date.now();
     const db = getDb();
-    const [pack] = await db.select().from(packs).where(eq(packs.id, body.packId)).limit(1);
-    if (!pack) return Response.json({ error: "Pack not found" }, { status: 404 });
-    const company = body.values.company || body.values.product || "your offer";
-    const audience = body.values.persona || body.values.audience || "a discerning buyer";
-    const proof = body.values.trigger || body.values.proof || body.values.thesis || "a timely, concrete insight";
-    const output = `# ${company}: a sharper way forward\n\n## The angle\n\n${audience} does not need more noise. They need a clear reason to care now. ${proof} creates that opening—and gives the message credibility before it ever asks for attention.\n\n## Recommended message\n\n**Subject:** A thought on ${company}\n\nHi there — I noticed ${proof.toLowerCase()}. That usually means the old playbook is starting to cost more than it returns.\n\nWe help teams turn that moment into focused action: a clearer story, less manual work, and an outcome people can measure. Worth comparing notes for 15 minutes next week?\n\n## Why this works\n\n- Leads with an observable signal, not a generic compliment\n- Connects the signal to a likely business cost\n- Makes one low-friction, specific ask\n\n---\n*Generated with ${pack.title} v${pack.version} · ${body.model}*`;
-    const [run] = await db.insert(runs).values({ userId: "demo-user", packId: pack.id, model: body.model, input: JSON.stringify(body.values), output }).returning();
-    return Response.json({ run, output, latency: Math.max(1.2, (Date.now() - started) / 1000).toFixed(1) });
+    await db.insert(runs).values({
+      id: runId,
+      userId: user.id,
+      packId: pack.id,
+      packVersion: pack.version,
+      provider,
+      model: modelId,
+      status: "running",
+      input: JSON.stringify(values),
+    });
+
+    const encoder = new TextEncoder();
+    const send = (controller: ReadableStreamDefaultController<Uint8Array>, payload: unknown) =>
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        let output = "";
+        let inputTokens = 0;
+        let outputTokens = 0;
+        try {
+          send(controller, { type: "start", runId, model: modelId, provider, packVersion: pack.version });
+
+          for await (const event of streamCompletion({
+            provider,
+            model: modelId,
+            systemPrompt: pack.systemPrompt,
+            prompt,
+            temperature: pack.temperature / 100,
+            maxTokens: pack.maxTokens,
+            apiKey,
+            signal: request.signal,
+          })) {
+            if (event.type === "text") {
+              output += event.text;
+              send(controller, { type: "delta", text: event.text });
+            } else {
+              // Providers report the two counts in different frames; keep the max
+              // so a later zero never clobbers a real number.
+              inputTokens = Math.max(inputTokens, event.inputTokens);
+              outputTokens = Math.max(outputTokens, event.outputTokens);
+            }
+          }
+
+          const latencyMs = Date.now() - startedAt;
+          await db
+            .update(runs)
+            .set({ status: "ok", output, inputTokens, outputTokens, latencyMs })
+            .where(eq(runs.id, runId));
+          send(controller, { type: "done", runId, inputTokens, outputTokens, latencyMs });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Generation failed.";
+          // Persist the partial output: a half-finished answer plus the error is
+          // far more debuggable than an empty row.
+          await db
+            .update(runs)
+            .set({ status: "error", output, error: message, latencyMs: Date.now() - startedAt })
+            .where(eq(runs.id, runId))
+            .catch(() => undefined);
+          send(controller, { type: "error", message, runId });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        // Streaming through a proxy that buffers defeats the whole point.
+        "x-accel-buffering": "no",
+      },
+    });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Generation failed" }, { status: 500 });
+    return errorResponse(error);
   }
 }

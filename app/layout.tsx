@@ -12,11 +12,11 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.includes("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
   return {
-    title: "PromptForge — AI workflows that work",
-    description: "Discover, run, and sell production-ready AI prompt workflows.",
+    title: "PromptForge",
+    description: "Internal prompt library — versioned packs, run against real models.",
     icons: { icon: "/favicon.svg" },
-    openGraph: { title: "PromptForge", description: "AI workflows that work.", images: [`${origin}/og.png`] },
-    twitter: { card: "summary_large_image", title: "PromptForge", description: "AI workflows that work.", images: [`${origin}/og.png`] },
+    openGraph: { title: "PromptForge", description: "Internal prompt library.", images: [`${origin}/og.png`] },
+    robots: { index: false, follow: false },
   };
 }
 

@@ -41,3 +41,9 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# local secrets
+.dev.vars
+
+# drizzle-kit output — db/ensure.ts is the source of truth at runtime
+/drizzle/

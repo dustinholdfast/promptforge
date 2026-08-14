@@ -1,0 +1,14 @@
+# Copy to `.dev.vars` (git-ignored) for local development.
+# In production these are Worker secrets:
+#   npx wrangler secret put ANTHROPIC_API_KEY
+#
+# You need at least one provider key. Models whose provider has no key are
+# disabled in the UI rather than failing at run time.
+
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
+GOOGLE_API_KEY=
+
+# Leave unset to close signup once the owner account exists.
+# Set it to let other people create accounts with this code.
+SIGNUP_INVITE_CODE=
