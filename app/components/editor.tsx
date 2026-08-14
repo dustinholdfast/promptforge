@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api-client";
 import { syncVariables } from "../../lib/template";
+import { LocalTime } from "./local-time";
 import type { ModelOption, Pack, PackVariable, PackVersion, ProviderId, Workspace } from "../types";
 
 type Props = {
@@ -278,7 +279,7 @@ export default function Editor({ pack, workspaces, models, providers, onSaved, o
                 <div>
                   <span>{version.note || "No note"}</span>
                   <small>
-                    {new Date(version.createdAt).toLocaleString()} · {version.model}
+                    <LocalTime value={version.createdAt} /> · {version.model}
                   </small>
                 </div>
                 {pack && version.version !== pack.version && (

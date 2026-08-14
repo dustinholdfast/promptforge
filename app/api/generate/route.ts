@@ -57,6 +57,9 @@ export async function POST(request: Request) {
       model: modelId,
       status: "running",
       input: JSON.stringify(values),
+      // Explicit ISO instant: SQLite's CURRENT_TIMESTAMP has no timezone marker
+      // and is misread as local time by `new Date()` in the browser.
+      createdAt: new Date(startedAt).toISOString(),
     });
 
     const encoder = new TextEncoder();

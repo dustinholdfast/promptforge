@@ -5,6 +5,7 @@ import { api } from "./api-client";
 import Editor from "./components/editor";
 import Runner from "./components/runner";
 import { Markdown } from "./components/markdown";
+import { LocalTime } from "./components/local-time";
 import type { Catalogue, Pack, RunSummary, Workspace } from "./types";
 
 type View = "library" | "history";
@@ -253,7 +254,7 @@ export default function PromptForgeApp({ catalogue, initialRuns }: Props) {
                       <h3>{run.status === "error" ? "Failed" : firstLine(run.preview) || "Empty output"}</h3>
                       <p>{run.status === "error" ? run.error : run.preview.slice(0, 180)}</p>
                       <small>
-                        {new Date(run.createdAt).toLocaleString()} · {run.model}
+                        <LocalTime value={run.createdAt} /> · {run.model}
                         {run.status === "ok" && ` · ${(run.latencyMs / 1000).toFixed(1)}s · ${run.outputTokens} tok`}
                       </small>
                     </div>
