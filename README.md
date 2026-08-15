@@ -72,6 +72,69 @@ renamed to `packs_legacy_v0` / `runs_legacy_v0` on first boot rather than being
 dropped. Delete them by hand once you are satisfied nothing was lost. The old
 `purchases` table is left untouched and is no longer read.
 
+## Docker
+
+The app can run in a container instead of `npm run dev`. It is still the same
+Cloudflare Worker — the image builds the worker bundle and serves it through
+`wrangler dev --local`, which gives it a real local D1 database (miniflare,
+persisted to a volume). There is no separate database service to run.
+
+### Compose (recommended)
+
+```bash
+cp .dev.vars.example .dev.vars     # paste in at least one API key
+docker compose up --build --wait   # build, start, block until healthy
+```
+
+The app is then on <http://localhost:8787>. Create an account — the first one
+made becomes the owner, exactly as in local dev.
+
+```bash
+docker compose logs -f web   # follow the worker's logs
+docker compose down          # stop; the D1 database is kept in the volume
+docker compose down -v       # stop and wipe the local database
+```
+
+Set the host port with `HOST_PORT` (the container always listens on 8787):
+
+```bash
+HOST_PORT=3000 docker compose up --build --wait
+```
+
+### Plain `docker build` / `docker run`
+
+Without Compose you provide the port mapping, the keys, and a volume yourself:
+
+```bash
+docker build -t promptforge:local .
+docker run --rm -p 8787:8787 \
+  --env-file .dev.vars \
+  -v promptforge-d1:/app/.wrangler/state \
+  promptforge:local
+```
+
+### Keys and how they reach the app
+
+Provider keys and `SIGNUP_INVITE_CODE` are read from the **Worker** `env`, not
+the container's process environment — so passing them with `env_file` or
+`docker run -e` is not enough on its own. The image entrypoint
+(`docker-entrypoint.sh`) bridges that: on every start it writes an allowlisted
+set of variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`,
+`SIGNUP_INVITE_CODE`) into the `.dev.vars` file wrangler loads. Only those keys
+are forwarded; anything else in the environment stays out of the Worker.
+
+A missing or empty key is not an error — the app boots and greys out the models
+whose provider has no key, same as local dev. If you add or change a key,
+restart the container so the entrypoint regenerates `.dev.vars`.
+
+### Data persistence
+
+The local D1 state lives under `/app/.wrangler/state`, mounted as the named
+volume `promptforge-d1`. It survives `docker compose down` (or a `docker run`
+that reuses the same volume) and is removed by `docker compose down -v`. Tables
+are still created on first request by `db/ensure.ts`, so there is no migration
+step in the container either.
+
 ## Working on it
 
 ```bash

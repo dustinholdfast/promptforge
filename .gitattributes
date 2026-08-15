@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings even on Windows checkouts (core.autocrlf).
+# CRLF here would make the container entrypoint fail with a `\r` parse error.
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf

@@ -1,0 +1,43 @@
+# Rebuilt inside the image — never copy the host's versions in.
+node_modules
+dist
+.vinext
+.next
+out
+
+# Local runtime state and logs (D1 data, miniflare, wrangler logs).
+.wrangler
+
+# Secrets must never enter the build context or image layers.
+.dev.vars
+.dev.*.log
+.env
+.env.*
+*.pem
+
+# VCS and tooling metadata. NB: .openai/hosting.json IS required by the build
+# (vite.config.ts imports it), so it is deliberately not ignored.
+.git
+.gitignore
+.castforge
+
+# Editor / OS cruft.
+.DS_Store
+Thumbs.db
+
+# Prototype tarball snapshots — large and unused by the build.
+*.tar.gz
+
+# Test coverage output.
+coverage
+
+# Generated TS ambient types.
+next-env.d.ts
+
+# Docker files themselves.
+Dockerfile
+.dockerignore
+compose.yaml
+compose.yml
+docker-compose.yml
+docker-compose.yaml

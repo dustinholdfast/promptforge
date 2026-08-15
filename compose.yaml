@@ -1,0 +1,55 @@
+# Local container orchestration for PromptForge.
+#
+# One service — the built worker served under `wrangler dev --local` (see the
+# Dockerfile for why). This file adds everything a single-container run needs
+# to behave like a real local deployment: a named volume so the local D1
+# database survives `down`/`up`, a healthcheck so `up --wait` blocks until the
+# app actually answers, an automatic restart policy, and an optional hand-off
+# of provider keys from `.dev.vars`.
+#
+#   docker compose up --build --wait     # build, start, wait until healthy
+#   docker compose logs -f web           # follow the worker's logs
+#   docker compose down                  # stop (D1 data is kept in the volume)
+#   docker compose down -v               # stop and wipe the local database
+#
+# Set at least one provider key in `.dev.vars` (copy `.dev.vars.example`) for
+# model calls to work; without it the app still boots and those models are
+# greyed out. `env_file` loads those keys into the container environment, and
+# the image entrypoint (docker-entrypoint.sh) forwards the allowlisted ones
+# into the Worker runtime so the app actually sees them.
+
+name: promptforge
+
+services:
+  web:
+    build:
+      context: .
+    image: promptforge:local
+    # Host port is overridable (HOST_PORT); the container always listens on 8787.
+    ports:
+      - "${HOST_PORT:-8787}:8787"
+    # Provider API keys + SIGNUP_INVITE_CODE, in KEY=VALUE form. Optional: a
+    # missing `.dev.vars` is not an error — the app boots without keys.
+    env_file:
+      - path: .dev.vars
+        required: false
+    volumes:
+      # Persist the local D1 / miniflare state so the database survives a
+      # stop/start cycle. `docker compose down -v` removes it for a clean slate.
+      - promptforge-d1:/app/.wrangler/state
+    restart: unless-stopped
+    # Node 22 (present in the runtime image) has a global fetch; treat any
+    # response under 500 as healthy so login redirects count as "up".
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/').then(r => process.exit(r.status < 500 ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  promptforge-d1:
