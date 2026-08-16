@@ -12,3 +12,8 @@ export function envString(key: string): string {
 export function hasEnv(key: string): boolean {
   return envString(key).length > 0;
 }
+
+/** The Docker worker cannot reach subscription CLIs running on the host. */
+export function subscriptionsAvailable(): boolean {
+  return envString("PROMPTFORGE_DISABLE_SUBSCRIPTIONS") !== "1";
+}

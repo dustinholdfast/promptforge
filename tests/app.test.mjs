@@ -26,6 +26,20 @@ test("generation goes through the real provider layer, not a canned string", asy
   assert.doesNotMatch(route, /a sharper way forward/i);
 });
 
+test("OpenAI and Anthropic are subscription-backed, not API-key-backed", async () => {
+  const providers = await read("lib/providers.ts");
+  const exampleEnv = await read(".dev.vars.example");
+  assert.match(providers, /local subscription bridge/i);
+  assert.doesNotMatch(providers, /api\.openai\.com|api\.anthropic\.com/);
+  assert.doesNotMatch(exampleEnv, /OPENAI_API_KEY|ANTHROPIC_API_KEY/);
+});
+
+test("Docker disables host-only subscription models", async () => {
+  const entrypoint = await read("docker-entrypoint.sh");
+  assert.match(entrypoint, /PROMPTFORGE_DISABLE_SUBSCRIPTIONS/);
+  assert.doesNotMatch(entrypoint, /ANTHROPIC_API_KEY|OPENAI_API_KEY/);
+});
+
 test("every API route requires an authenticated user", async () => {
   for (const route of ["app/api/packs/route.ts", "app/api/runs/route.ts", "app/api/generate/route.ts"]) {
     assert.match(await read(route), /requireUser\(request\)/, `${route} must authenticate`);

@@ -13,7 +13,7 @@ catalogue — the earlier prototype had all three and they have been removed.
 | Area | Status |
 | --- | --- |
 | Accounts, sessions, sign-in | Real. PBKDF2 password hashes, HttpOnly session cookies in D1. |
-| Model calls | Real. Streaming Anthropic / OpenAI / Gemini over `fetch`. |
+| Model calls | Real. OpenAI through Codex, Anthropic through Claude Code, and optional Gemini over its API. |
 | Packs | Create, edit, duplicate, archive. Editing the prompt writes a new version; you can restore any earlier one. |
 | Run history | Every run persisted with output, token counts, latency, and the error if it failed. |
 | Workspaces | Packs are filed under Jinni Vacations, Holdfast Cyber, FieldCred or Shared. |
@@ -28,33 +28,52 @@ Requires Node 22.13+.
 
 ```bash
 npm install
-cp .dev.vars.example .dev.vars   # then paste in at least one API key
 npm run dev
 ```
+
+`npm run dev` starts both the web app and a loopback-only subscription bridge.
+The bridge listens on `127.0.0.1:4317`, invokes the official CLIs, and never
+copies their OAuth credentials into PromptForge.
 
 Open the app and create an account. **The first account created becomes the
 owner.** After that, signup is closed unless you set `SIGNUP_INVITE_CODE` in
 `.dev.vars` — anyone with that code can then create a member account.
 
-### Keys
+### Subscription authentication
 
-`.dev.vars` is git-ignored and is read by Wrangler in local dev:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-GOOGLE_API_KEY=...
-SIGNUP_INVITE_CODE=some-shared-string
-```
-
-You need at least one. Models belonging to a provider with no key are shown
-greyed out rather than failing mid-run.
-
-In production these are Worker secrets:
+Install and sign in to both CLIs once:
 
 ```bash
-npx wrangler secret put ANTHROPIC_API_KEY
+codex login
+claude auth login
 ```
+
+Confirm them at any time:
+
+```bash
+codex login status
+claude auth status
+```
+
+OpenAI and Anthropic use the limits included with the signed-in ChatGPT and
+Claude subscriptions. PromptForge does not read `~/.codex/auth.json`, the OS
+keychain, or Claude credential files; only the official CLIs handle those
+credentials.
+
+`.dev.vars` is optional and git-ignored. Copy `.dev.vars.example` only when you
+want Gemini, a non-default bridge address, or an invite code:
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+`GOOGLE_API_KEY` is still supported for Gemini because Google does not provide
+an equivalent subscription-authenticated CLI integration here. Google models
+are disabled when that key is empty.
+
+The subscription bridge is intentionally local-only. A deployed Cloudflare
+Worker cannot reach a CLI on your PC, so OpenAI and Anthropic generation is not
+available in a remote deployment of this build.
 
 ### Database
 
@@ -103,7 +122,7 @@ HOST_PORT=3000 docker compose up --build --wait
 
 ### Plain `docker build` / `docker run`
 
-Without Compose you provide the port mapping, the keys, and a volume yourself:
+Without Compose you provide the port mapping, optional Worker variables, and a volume yourself:
 
 ```bash
 docker build -t promptforge:local .
@@ -113,19 +132,25 @@ docker run --rm -p 8787:8787 \
   promptforge:local
 ```
 
-### Keys and how they reach the app
+### Container configuration and model access
 
-Provider keys and `SIGNUP_INVITE_CODE` are read from the **Worker** `env`, not
+`GOOGLE_API_KEY` and `SIGNUP_INVITE_CODE` are read from the **Worker** `env`, not
 the container's process environment — so passing them with `env_file` or
 `docker run -e` is not enough on its own. The image entrypoint
 (`docker-entrypoint.sh`) bridges that: on every start it writes an allowlisted
-set of variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`,
-`SIGNUP_INVITE_CODE`) into the `.dev.vars` file wrangler loads. Only those keys
-are forwarded; anything else in the environment stays out of the Worker.
+set of variables (`GOOGLE_API_KEY`, `SIGNUP_INVITE_CODE`) into the `.dev.vars`
+file wrangler loads. Only those values are forwarded; anything else in the
+environment stays out of the Worker.
 
-A missing or empty key is not an error — the app boots and greys out the models
-whose provider has no key, same as local dev. If you add or change a key,
-restart the container so the entrypoint regenerates `.dev.vars`.
+OpenAI and Anthropic subscription access depends on host-authenticated Codex
+and Claude CLIs plus a loopback-only bridge, so those models are disabled in
+the container. Run `npm run dev` directly on the host to use subscription
+models. Docker remains useful with optional Gemini API access and for the rest
+of PromptForge's library/history workflow.
+
+A missing Google key is not a startup error; Gemini is simply disabled. If you
+add or change the key, restart the container so the entrypoint regenerates
+`.dev.vars`.
 
 ### Data persistence
 
@@ -160,11 +185,14 @@ app/
 lib/
   auth.ts       sessions, sign-up/in, upstream identity headers
   password.ts   PBKDF2 over WebCrypto
-  providers.ts  Anthropic / OpenAI / Gemini adapters + SSE parsing
+  providers.ts  subscription bridge / optional Gemini transport + SSE parsing
   template.ts   {{variable}} extraction and rendering
   models.ts     the model catalogue — update model IDs here
   library.ts    shared read paths for the page and the API
   seed.ts       starter packs
+local/
+  subscription-bridge.mjs  loopback server that owns Codex / Claude processes
+  dev.mjs                  starts the bridge and vinext together
 db/
   schema.ts, ensure.ts  Drizzle schema and runtime DDL
 ```

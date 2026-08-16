@@ -176,26 +176,35 @@ export default function Editor({ pack, workspaces, models, providers, onSaved, o
                 {models.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.label}
-                    {providers[option.provider] ? "" : " — no key"}
+                    {providers[option.provider] ? "" : " — unavailable"}
                   </option>
                 ))}
               </select>
             </label>
+            {provider === "google" ? (
+              <label>
+                <span>
+                  Temperature <small>{form.temperature.toFixed(2)}</small>
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1.5}
+                  step={0.05}
+                  value={form.temperature}
+                  onChange={(event) => set("temperature", Number(event.target.value))}
+                />
+              </label>
+            ) : (
+              <label>
+                <span>Generation controls</span>
+                <small>Sampling is managed by the signed-in subscription CLI.</small>
+              </label>
+            )}
             <label>
               <span>
-                Temperature <small>{form.temperature.toFixed(2)}</small>
+                Max output tokens <small>{provider === "google" ? "hard limit" : "best effort"}</small>
               </span>
-              <input
-                type="range"
-                min={0}
-                max={1.5}
-                step={0.05}
-                value={form.temperature}
-                onChange={(event) => set("temperature", Number(event.target.value))}
-              />
-            </label>
-            <label>
-              <span>Max output tokens</span>
               <input
                 type="number"
                 min={256}

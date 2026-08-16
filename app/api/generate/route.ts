@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { packs, runs } from "../../../db/schema";
 import { HttpError, newId, requireUser } from "../../../lib/auth";
-import { envString } from "../../../lib/env";
+import { envString, subscriptionsAvailable } from "../../../lib/env";
 import { errorResponse, readJson, str } from "../../../lib/http";
 import { PROVIDERS, resolveProvider } from "../../../lib/models";
 import { ProviderError, streamCompletion } from "../../../lib/providers";
@@ -36,10 +36,17 @@ export async function POST(request: Request) {
     // The runner may override the model for a single run without editing the pack.
     const modelId = str(body.model).trim() || pack.model;
     const provider = resolveProvider(modelId, pack.provider);
-    const apiKey = envString(PROVIDERS[provider].envKey);
-    if (!apiKey) {
+    if (provider !== "google" && !subscriptionsAvailable()) {
       throw new ProviderError(
-        `${PROVIDERS[provider].label} has no API key configured. Add ${PROVIDERS[provider].envKey} to .dev.vars (local) or run \`npx wrangler secret put ${PROVIDERS[provider].envKey}\` (deployed).`,
+        "Subscription models are unavailable inside the Docker worker. Run PromptForge with `npm run dev` on the host.",
+        503,
+        provider,
+      );
+    }
+    const apiKey = provider === "google" ? envString(PROVIDERS.google.envKey!) : "";
+    if (provider === "google" && !apiKey) {
+      throw new ProviderError(
+        "Google has no API key configured. Add GOOGLE_API_KEY to .dev.vars or choose an OpenAI/Anthropic subscription model.",
         401,
         provider,
       );
@@ -82,6 +89,7 @@ export async function POST(request: Request) {
             temperature: pack.temperature / 100,
             maxTokens: pack.maxTokens,
             apiKey,
+            bridgeUrl: envString("PROMPTFORGE_BRIDGE_URL"),
             signal: request.signal,
           })) {
             if (event.type === "text") {

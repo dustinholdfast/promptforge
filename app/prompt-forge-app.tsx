@@ -55,8 +55,7 @@ export default function PromptForgeApp({ catalogue, initialRuns }: Props) {
     );
   }, [packs, workspace, search]);
 
-  const missingKeys = (Object.entries(data.providers) as Array<[string, boolean]>).filter(([, ready]) => !ready);
-  const noKeysAtAll = Object.values(data.providers).every((ready) => !ready);
+  const unavailableProviders = (Object.entries(data.providers) as Array<[string, boolean]>).filter(([, ready]) => !ready);
 
   const signOut = async () => {
     await api("/api/auth", { action: "logout" });
@@ -163,17 +162,10 @@ export default function PromptForgeApp({ catalogue, initialRuns }: Props) {
         </header>
 
         {error && <div className="banner error">{error}</div>}
-        {noKeysAtAll && (
-          <div className="banner warn">
-            No model API keys are configured yet, so runs will fail. Add at least one of{" "}
-            <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code> or <code>GOOGLE_API_KEY</code> to{" "}
-            <code>.dev.vars</code> and restart the dev server.
-          </div>
-        )}
-        {!noKeysAtAll && missingKeys.length > 0 && (
+        {unavailableProviders.length > 0 && (
           <div className="banner">
-            No key for {missingKeys.map(([name]) => name).join(", ")} — models from{" "}
-            {missingKeys.length > 1 ? "those providers are" : "that provider is"} disabled.
+            OpenAI and Anthropic use your signed-in local subscriptions. {unavailableProviders.map(([name]) => name).join(", ")} models
+            are disabled until their optional local credentials are configured.
           </div>
         )}
 

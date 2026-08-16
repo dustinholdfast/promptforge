@@ -1,7 +1,7 @@
 #!/bin/sh
 # Container runtime configuration for PromptForge.
 #
-# The app reads its provider keys + SIGNUP_INVITE_CODE from the Worker `env`
+# The app reads its optional Google key + SIGNUP_INVITE_CODE from the Worker `env`
 # (via `cloudflare:workers`), NOT from the container's process environment.
 # Under `wrangler dev --local` those bindings are loaded from a `.dev.vars`
 # file that wrangler resolves *next to the -c config* — never from the ambient
@@ -17,7 +17,7 @@
 set -eu
 
 # Runtime variables the Worker consumes. Keep in sync with .dev.vars.example.
-RUNTIME_VARS="ANTHROPIC_API_KEY OPENAI_API_KEY GOOGLE_API_KEY SIGNUP_INVITE_CODE"
+RUNTIME_VARS="GOOGLE_API_KEY SIGNUP_INVITE_CODE"
 
 # Locate the wrangler config in the incoming command so the generated
 # .dev.vars lands in the directory wrangler loads it from (alongside -c).
@@ -41,5 +41,10 @@ for name in $RUNTIME_VARS; do
     printf '%s=%s\n' "$name" "$value" >>"$dev_vars"
   fi
 done
+
+# Codex and Claude are authenticated host CLIs. The loopback-only bridge is
+# deliberately unreachable from this container, so hide those models instead
+# of presenting controls that can only fail at generation time.
+printf '%s=%s\n' "PROMPTFORGE_DISABLE_SUBSCRIPTIONS" "1" >>"$dev_vars"
 
 exec "$@"

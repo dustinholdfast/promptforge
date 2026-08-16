@@ -1,10 +1,10 @@
 /**
- * Real model calls. One small adapter per provider, all over `fetch` so this
- * runs unmodified on Cloudflare Workers (no Node-only SDKs).
+ * Local model transports.
  *
- * Everything below the transport layer is a pure function over already-parsed
- * JSON, which is what makes the wire formats testable without a network or an
- * API key — see tests/providers.test.mjs.
+ * OpenAI and Anthropic requests go to the loopback-only Node bridge started by
+ * `npm run dev`; that bridge invokes the authenticated Codex and Claude CLIs.
+ * Gemini remains an optional direct API integration because Google has no
+ * equivalent subscription CLI in PromptForge.
  */
 
 import type { ProviderId } from "./models";
@@ -18,10 +18,10 @@ export type GenerateOptions = {
   model: string;
   systemPrompt: string;
   prompt: string;
-  /** 0–2, as the providers express it. */
   temperature: number;
   maxTokens: number;
-  apiKey: string;
+  apiKey?: string;
+  bridgeUrl?: string;
   signal?: AbortSignal;
 };
 
@@ -37,10 +37,6 @@ export class ProviderError extends Error {
   }
 }
 
-/* ------------------------------------------------------------------ *
- * SSE plumbing
- * ------------------------------------------------------------------ */
-
 export type SseEvent = { event: string; data: string };
 
 /** Parse a byte stream of server-sent events, tolerating arbitrary chunking. */
@@ -49,7 +45,6 @@ export async function* sseEvents(source: AsyncIterable<Uint8Array>): AsyncGenera
   let buffer = "";
   for await (const chunk of source) {
     buffer += decoder.decode(chunk, { stream: true });
-    // Records are separated by a blank line; \r\n is legal too.
     let boundary = buffer.search(/\r?\n\r?\n/);
     while (boundary !== -1) {
       const raw = buffer.slice(0, boundary);
@@ -79,8 +74,6 @@ function parseSseRecord(raw: string): SseEvent | null {
 }
 
 function bodyIterable(body: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
-  // Workers' ReadableStream is not reliably async-iterable across runtimes,
-  // so drive the reader ourselves.
   return {
     async *[Symbol.asyncIterator]() {
       const reader = body.getReader();
@@ -97,64 +90,10 @@ function bodyIterable(body: ReadableStream<Uint8Array>): AsyncIterable<Uint8Arra
   };
 }
 
-/* ------------------------------------------------------------------ *
- * Per-provider decoders (pure)
- * ------------------------------------------------------------------ */
-
 type Json = Record<string, unknown>;
-
 const asRecord = (value: unknown): Json | null =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : null;
 const asNumber = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
-
-export function decodeAnthropic(payload: unknown): StreamEvent[] {
-  const event = asRecord(payload);
-  if (!event) return [];
-  switch (event.type) {
-    case "content_block_delta": {
-      const delta = asRecord(event.delta);
-      const text = delta?.type === "text_delta" && typeof delta.text === "string" ? delta.text : "";
-      return text ? [{ type: "text", text }] : [];
-    }
-    case "message_start": {
-      const usage = asRecord(asRecord(event.message)?.usage);
-      return usage ? [{ type: "usage", inputTokens: asNumber(usage.input_tokens), outputTokens: 0 }] : [];
-    }
-    case "message_delta": {
-      const usage = asRecord(event.usage);
-      return usage ? [{ type: "usage", inputTokens: 0, outputTokens: asNumber(usage.output_tokens) }] : [];
-    }
-    case "error": {
-      const error = asRecord(event.error);
-      throw new ProviderError(String(error?.message ?? "Anthropic stream error"), 502, "anthropic");
-    }
-    default:
-      return [];
-  }
-}
-
-export function decodeOpenAI(payload: unknown): StreamEvent[] {
-  const event = asRecord(payload);
-  if (!event) return [];
-  if (asRecord(event.error)) {
-    throw new ProviderError(String(asRecord(event.error)?.message ?? "OpenAI stream error"), 502, "openai");
-  }
-  const out: StreamEvent[] = [];
-  const choices = Array.isArray(event.choices) ? event.choices : [];
-  for (const choice of choices) {
-    const delta = asRecord(asRecord(choice)?.delta);
-    if (typeof delta?.content === "string" && delta.content) out.push({ type: "text", text: delta.content });
-  }
-  const usage = asRecord(event.usage);
-  if (usage) {
-    out.push({
-      type: "usage",
-      inputTokens: asNumber(usage.prompt_tokens),
-      outputTokens: asNumber(usage.completion_tokens),
-    });
-  }
-  return out;
-}
 
 export function decodeGoogle(payload: unknown): StreamEvent[] {
   const event = asRecord(payload);
@@ -183,90 +122,12 @@ export function decodeGoogle(payload: unknown): StreamEvent[] {
   return out;
 }
 
-/**
- * Reasoning-family OpenAI models reject any temperature other than the
- * default, so we omit the field entirely rather than fail the whole run.
- */
-export function openAISupportsTemperature(model: string): boolean {
-  return !/^(gpt-5|o[1-9])/.test(model);
-}
-
-/* ------------------------------------------------------------------ *
- * Requests
- * ------------------------------------------------------------------ */
-
-type Wire = { url: string; init: RequestInit; decode: (payload: unknown) => StreamEvent[] };
-
-function buildRequest(options: GenerateOptions): Wire {
-  const { model, systemPrompt, prompt, temperature, maxTokens, apiKey } = options;
-  const system = systemPrompt.trim();
-
-  if (options.provider === "anthropic") {
-    return {
-      url: "https://api.anthropic.com/v1/messages",
-      init: {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: maxTokens,
-          temperature: Math.min(temperature, 1), // Anthropic caps temperature at 1
-          stream: true,
-          ...(system ? { system } : {}),
-          messages: [{ role: "user", content: prompt }],
-        }),
-      },
-      decode: decodeAnthropic,
-    };
-  }
-
-  if (options.provider === "openai") {
-    return {
-      url: "https://api.openai.com/v1/chat/completions",
-      init: {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model,
-          stream: true,
-          stream_options: { include_usage: true },
-          max_completion_tokens: maxTokens,
-          ...(openAISupportsTemperature(model) ? { temperature } : {}),
-          messages: [
-            ...(system ? [{ role: "system", content: system }] : []),
-            { role: "user", content: prompt },
-          ],
-        }),
-      },
-      decode: decodeOpenAI,
-    };
-  }
-
-  return {
-    url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
-    init: {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
-        ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { temperature, maxOutputTokens: maxTokens },
-      }),
-    },
-    decode: decodeGoogle,
-  };
-}
-
 /** Pull the most useful message out of a provider's error body. */
 export function readErrorMessage(body: string, status: number): string {
   try {
     const parsed = JSON.parse(body) as Json;
     const error = asRecord(parsed.error) ?? parsed;
-    const message = error.message ?? error.detail ?? parsed.message;
+    const message = error.message ?? error.detail ?? parsed.message ?? parsed.error;
     if (typeof message === "string" && message) return message;
   } catch {
     /* fall through to the raw body */
@@ -276,17 +137,39 @@ export function readErrorMessage(body: string, status: number): string {
   return `Provider returned HTTP ${status}`;
 }
 
-export async function* streamCompletion(options: GenerateOptions): AsyncGenerator<StreamEvent> {
-  if (!options.apiKey) {
+function bridgeEndpoint(configured = "http://127.0.0.1:4317"): string {
+  const url = new URL("/generate", configured);
+  if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
+    throw new Error("PROMPTFORGE_BRIDGE_URL must use HTTP on the local loopback interface.");
+  }
+  return url.toString();
+}
+
+async function* streamSubscription(options: GenerateOptions): AsyncGenerator<StreamEvent> {
+  let response: Response;
+  try {
+    response = await fetch(bridgeEndpoint(options.bridgeUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: options.provider,
+        model: options.model,
+        systemPrompt: options.systemPrompt,
+        prompt: options.prompt,
+        maxTokens: options.maxTokens,
+      }),
+      signal: options.signal,
+    });
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
     throw new ProviderError(
-      `No API key configured for ${options.provider}. Add it to .dev.vars locally or as a Worker secret in production.`,
-      401,
+      `Could not reach the local subscription bridge. Start PromptForge with \`npm run dev\`. ${
+        error instanceof Error ? error.message : ""
+      }`.trim(),
+      503,
       options.provider,
     );
   }
-
-  const { url, init, decode } = buildRequest(options);
-  const response = await fetch(url, { ...init, signal: options.signal });
 
   if (!response.ok || !response.body) {
     const body = response.body ? await response.text() : "";
@@ -294,13 +177,62 @@ export async function* streamCompletion(options: GenerateOptions): AsyncGenerato
   }
 
   for await (const event of sseEvents(bodyIterable(response.body))) {
-    if (event.data === "[DONE]") return;
-    let payload: unknown;
+    let payload: Json | null = null;
     try {
-      payload = JSON.parse(event.data);
+      payload = asRecord(JSON.parse(event.data));
     } catch {
-      continue; // keep-alive or partial comment frames
+      continue;
     }
-    yield* decode(payload);
+    if (!payload) continue;
+    if (payload.type === "text" && typeof payload.text === "string") {
+      yield { type: "text", text: payload.text };
+    } else if (payload.type === "usage") {
+      yield {
+        type: "usage",
+        inputTokens: asNumber(payload.inputTokens),
+        outputTokens: asNumber(payload.outputTokens),
+      };
+    } else if (payload.type === "error") {
+      throw new ProviderError(String(payload.message ?? "Subscription CLI failed."), 502, options.provider);
+    }
   }
+}
+
+async function* streamGoogle(options: GenerateOptions): AsyncGenerator<StreamEvent> {
+  if (!options.apiKey) {
+    throw new ProviderError("No Google API key configured. Add GOOGLE_API_KEY to .dev.vars.", 401, "google");
+  }
+  const system = options.systemPrompt.trim();
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(options.model)}:streamGenerateContent?alt=sse`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": options.apiKey },
+      body: JSON.stringify({
+        ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+        contents: [{ role: "user", parts: [{ text: options.prompt }] }],
+        generationConfig: { temperature: options.temperature, maxOutputTokens: options.maxTokens },
+      }),
+      signal: options.signal,
+    },
+  );
+
+  if (!response.ok || !response.body) {
+    const body = response.body ? await response.text() : "";
+    throw new ProviderError(readErrorMessage(body, response.status), response.status, "google");
+  }
+  for await (const event of sseEvents(bodyIterable(response.body))) {
+    if (event.data === "[DONE]") return;
+    try {
+      yield* decodeGoogle(JSON.parse(event.data));
+    } catch (error) {
+      if (error instanceof SyntaxError) continue;
+      throw error;
+    }
+  }
+}
+
+export async function* streamCompletion(options: GenerateOptions): AsyncGenerator<StreamEvent> {
+  if (options.provider === "google") yield* streamGoogle(options);
+  else yield* streamSubscription(options);
 }

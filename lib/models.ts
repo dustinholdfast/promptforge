@@ -16,19 +16,23 @@ export type ModelOption = {
   note: string;
 };
 
-export const PROVIDERS: Record<ProviderId, { label: string; envKey: string; docs: string }> = {
+export const PROVIDERS: Record<
+  ProviderId,
+  { label: string; access: "subscription" | "api"; envKey?: string; docs: string }
+> = {
   anthropic: {
     label: "Anthropic",
-    envKey: "ANTHROPIC_API_KEY",
-    docs: "https://platform.claude.com/docs/en/about-claude/models/overview",
+    access: "subscription",
+    docs: "https://code.claude.com/docs/en/headless",
   },
   openai: {
     label: "OpenAI",
-    envKey: "OPENAI_API_KEY",
-    docs: "https://developers.openai.com/api/docs/models",
+    access: "subscription",
+    docs: "https://developers.openai.com/codex/cli/reference",
   },
   google: {
     label: "Google",
+    access: "api",
     envKey: "GOOGLE_API_KEY",
     docs: "https://ai.google.dev/gemini-api/docs/models",
   },
@@ -38,7 +42,7 @@ export const MODELS: ModelOption[] = [
   { provider: "anthropic", id: "claude-sonnet-5", label: "Claude Sonnet 5", note: "Balanced default" },
   { provider: "anthropic", id: "claude-opus-5", label: "Claude Opus 5", note: "Hardest reasoning" },
   { provider: "anthropic", id: "claude-haiku-4-5", label: "Claude Haiku 4.5", note: "Fast and cheap" },
-  { provider: "openai", id: "gpt-5.6", label: "GPT-5.6", note: "Frontier" },
+  { provider: "openai", id: "gpt-5.6", label: "GPT-5.6 Sol", note: "Frontier" },
   { provider: "openai", id: "gpt-5.6-terra", label: "GPT-5.6 Terra", note: "Balanced" },
   { provider: "openai", id: "gpt-5.6-luna", label: "GPT-5.6 Luna", note: "Cost-sensitive" },
   { provider: "google", id: "gemini-3.6-flash", label: "Gemini 3.6 Flash", note: "Fast, long context" },

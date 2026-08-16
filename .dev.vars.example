@@ -1,12 +1,10 @@
 # Copy to `.dev.vars` (git-ignored) for local development.
-# In production these are Worker secrets:
-#   npx wrangler secret put ANTHROPIC_API_KEY
-#
-# You need at least one provider key. Models whose provider has no key are
-# disabled in the UI rather than failing at run time.
+# `npm run dev` starts a loopback bridge at this address. OpenAI and
+# Anthropic authenticate through `codex login` and `claude auth login`, so no
+# API keys are stored in PromptForge.
+PROMPTFORGE_BRIDGE_URL=http://127.0.0.1:4317
 
-ANTHROPIC_API_KEY=
-OPENAI_API_KEY=
+# Optional: Google remains API-backed because it has no subscription CLI.
 GOOGLE_API_KEY=
 
 # Leave unset to close signup once the owner account exists.

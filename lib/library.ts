@@ -2,7 +2,7 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { packs, runs } from "../db/schema";
 import type { SessionUser } from "./auth";
-import { hasEnv } from "./env";
+import { hasEnv, subscriptionsAvailable } from "./env";
 import { MODELS, PROVIDERS, type ProviderId } from "./models";
 import { seedStarterPacks } from "./seed";
 import { parseVariables } from "./template";
@@ -23,9 +23,11 @@ export const toPack = (row: typeof packs.$inferSelect) => ({
 });
 
 export const providerStatus = (): Record<ProviderId, boolean> =>
-  Object.fromEntries(
-    (Object.keys(PROVIDERS) as ProviderId[]).map((provider) => [provider, hasEnv(PROVIDERS[provider].envKey)]),
-  ) as Record<ProviderId, boolean>;
+  ({
+    anthropic: subscriptionsAvailable(),
+    openai: subscriptionsAvailable(),
+    google: hasEnv(PROVIDERS.google.envKey!),
+  });
 
 export async function loadCatalogue(user: SessionUser) {
   await seedStarterPacks(user.id);

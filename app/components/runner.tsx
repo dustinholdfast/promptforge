@@ -134,9 +134,8 @@ export default function Runner({ pack, models, providers, initialValues, onClose
 
       {!providerReady && (
         <div className="banner warn">
-          No API key configured for <strong>{provider}</strong>. Add it to <code>.dev.vars</code> locally, or run{" "}
-          <code>npx wrangler secret put</code> for the deployed Worker. Pick a different model below to use a
-          provider that is configured.
+          <strong>{provider}</strong> is not available locally. Google requires <code>GOOGLE_API_KEY</code> in{" "}
+          <code>.dev.vars</code>; OpenAI and Anthropic require signed-in Codex and Claude CLIs.
         </div>
       )}
 
@@ -189,14 +188,14 @@ export default function Runner({ pack, models, providers, initialValues, onClose
                 {models.map((option) => (
                   <option key={option.id} value={option.id} disabled={!providers[option.provider]}>
                     {option.label}
-                    {providers[option.provider] ? "" : " — no key"}
+                    {providers[option.provider] ? "" : " — unavailable"}
                   </option>
                 ))}
               </select>
             </label>
             <div>
-              <span>Temperature</span>
-              <b>{pack.temperature.toFixed(2)}</b>
+              <span>Access</span>
+              <b>{provider === "google" ? "API key" : "Subscription"}</b>
             </div>
           </div>
 
